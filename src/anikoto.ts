@@ -235,7 +235,6 @@ const AnikotoExtension = {
   description: "Fast high-quality direct HLS video streams with soft subtitles from Anikoto.",
 
   async getEpisodes(meta: any) {
-    console.log("[Anikoto] >>> getEpisodes started for:", JSON.stringify(meta.titles));
     const titles = [
       meta.titles && meta.titles.english,
       meta.titles && meta.titles.romaji,
@@ -250,11 +249,8 @@ const AnikotoExtension = {
       if (!query) continue;
       try {
         const searchUrl = ANIKOTO + "/filter?keyword=" + encodeURIComponent(query);
-        console.log("[Anikoto] Searching keyword:", query, "url:", searchUrl);
         const res = await fetch(searchUrl, { headers: HEADERS });
-        console.log("[Anikoto] Search response HTTP:", res.status);
         const html = await res.text();
-        console.log("[Anikoto] Search response HTML length:", html.length);
 
         const linkRegex =
           /<a\s+class="name d-title"\s+href="(?:https?:\/\/[^"/]+)?\/watch\/([^"/]+)(?:\/ep-\d+)?"[^>]*data-jp="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
@@ -274,17 +270,15 @@ const AnikotoExtension = {
           candidates.push(cand);
         }
 
-        console.log("[Anikoto] Found candidates for", query, ":", candidates.length);
         if (candidates.length) break;
       } catch (e) {
-        console.warn("[Anikoto] Search error:", (e as any).message);
+        console.warn("Anikoto search error:", (e as any).message);
       }
     }
 
     candidates.sort((a, b) => b.score - a.score);
     if (candidates.length > 0) {
       targetSlug = candidates[0].slug;
-      console.log("[Anikoto] Best candidate chosen:", targetSlug, "score:", candidates[0].score);
     }
 
     if (!targetSlug) {
@@ -293,32 +287,26 @@ const AnikotoExtension = {
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/^-|-$/g, "");
-      console.log("[Anikoto] Using fallback slug:", targetSlug);
     }
 
     // 2. Fetch anime watch page to get showId
     const episodes: any[] = [];
     try {
       const watchUrl = ANIKOTO + "/watch/" + targetSlug;
-      console.log("[Anikoto] Fetching watchUrl:", watchUrl);
       const res = await fetch(watchUrl, { headers: HEADERS });
-      console.log("[Anikoto] Watch page HTTP:", res.status);
       const html = await res.text();
 
       const showIdMatch = html.match(/data-id="(\d+)"/);
       const showId = showIdMatch ? showIdMatch[1] : null;
-      console.log("[Anikoto] Extracted showId:", showId);
 
       if (showId) {
         const epListUrl = ANIKOTO + "/ajax/episode/list/" + showId;
-        console.log("[Anikoto] Fetching episode list URL:", epListUrl);
         const listRes = await fetch(epListUrl, {
           headers: Object.assign({}, HEADERS, {
             "X-Requested-With": "XMLHttpRequest",
             Referer: watchUrl,
           }),
         });
-        console.log("[Anikoto] Episode list HTTP:", listRes.status);
         const listData = await listRes.json();
         const listHtml = listData && listData.result ? listData.result : "";
 
@@ -349,16 +337,14 @@ const AnikotoExtension = {
         }
       }
     } catch (e) {
-      console.warn("[Anikoto] Parse episodes error:", (e as any).message);
+      console.warn("Anikoto parse episodes error:", (e as any).message);
     }
 
     episodes.sort((a, b) => a.number - b.number);
-    console.log("[Anikoto] Total parsed episodes:", episodes.length);
     return episodes;
   },
 
   async getStreams(episodeRef: string, audio: string) {
-    console.log("[Anikoto] >>> getStreams started for ref:", episodeRef.slice(0, 30) + "...", "audio:", audio);
     const streams: any[] = [];
     let intro: any = null;
     let outro: any = null;
@@ -373,7 +359,6 @@ const AnikotoExtension = {
       });
       const data = await res.json();
       const serverHtml = data && data.result ? data.result : "";
-      console.log("[Anikoto] Server list HTML len:", serverHtml.length);
 
       const typeRegex = /<div\s+class="type"\s+data-type="([^"]+)">([\s\S]*?)<\/ul>\s*<\/div>/gi;
       let typeMatch: RegExpExecArray | null;
@@ -393,11 +378,9 @@ const AnikotoExtension = {
           });
         }
       }
-      console.log("[Anikoto] Found matching server links for audio", audio, ":", linkIds.length);
 
       for (const s of linkIds) {
         try {
-          console.log("[Anikoto] Resolving server:", s.name, "id:", s.linkId.slice(0, 25) + "...");
           const sRes = await fetch(ANIKOTO + "/ajax/server?get=" + encodeURIComponent(s.linkId), {
             headers: Object.assign({}, HEADERS, {
               "X-Requested-With": "XMLHttpRequest",
@@ -406,7 +389,6 @@ const AnikotoExtension = {
           });
           const sData = await sRes.json();
           const embedUrl = sData && sData.result ? sData.result.url : null;
-          console.log("[Anikoto] Embed URL:", embedUrl);
 
           if (embedUrl) {
             if (sData.result.skip_data) {
