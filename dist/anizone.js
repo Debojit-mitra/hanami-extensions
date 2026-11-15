@@ -58,38 +58,17 @@
   }
 
   function buildSearchQueries(meta) {
-    const titles = [
+    const list = [
       meta.titles && meta.titles.english,
       meta.titles && meta.titles.romaji,
-      ...(meta.titles && meta.titles.synonyms || [])
     ].filter(Boolean);
 
-    const queries = new Set();
-    function add(str) {
-      if (!str) return;
-      const clean = str.replace(/\s+/g, " ").trim();
-      if (clean.length >= 2) queries.add(clean);
+    const queries = [];
+    for (const t of list) {
+      const clean = t.replace(/\s+/g, " ").trim();
+      if (clean && !queries.includes(clean)) queries.push(clean);
     }
-
-    for (const t of titles) {
-      add(t);
-      const parts = t.split(/[:\u2013\u2014\-|]/);
-      if (parts.length > 1) {
-        for (const p of parts) add(p);
-      }
-      const stripped = t
-        .replace(/\b(?:season|part|cour|stage)\s*\d+\b/gi, "")
-        .replace(/\b\d+(?:st|nd|rd|th)\s*(?:season|part)\b/gi, "")
-        .replace(/\s+/g, " ")
-        .trim();
-      if (stripped !== t) add(stripped);
-      const words = t.split(/\s+/);
-      if (words.length > 4) {
-        add(words.slice(0, 4).join(" "));
-      }
-    }
-
-    return Array.from(queries).slice(0, 6);
+    return queries.slice(0, 2);
   }
 
   function scoreMatch(candidate, meta) {
@@ -147,8 +126,8 @@
   const AnizoneExtension = {
     id: "anizone",
     name: "AniZone",
-    version: "1.0.2",
-    versionCode: 3,
+    version: "1.0.3",
+    versionCode: 4,
     author: "Hanami Community",
     audio: ["sub"],
     baseUrl: BASE,
@@ -177,7 +156,7 @@
                 targetSlug = item.slug;
               }
             }
-            if (bestScore >= 0.9) break;
+            if (bestScore >= 0.7) break;
           }
         } catch (e) {
           console.warn("AniZone search error:", e.message);

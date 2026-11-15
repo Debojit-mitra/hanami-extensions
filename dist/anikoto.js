@@ -16,7 +16,7 @@
       .replace(/&lt;/g, "<")
       .replace(/&gt;/g, ">")
       .replace(/&quot;/g, '"')
-      .replace(/&#039;/g, "'")
+      .replace(/&#0*39;|&apos;/g, "'")
       .replace(/<[^>]+>/g, "")
       .trim();
   }
@@ -24,8 +24,8 @@
   const AnikotoExtension = {
     id: "anikoto",
     name: "Anikoto",
-    version: "1.0.2",
-    versionCode: 3,
+    version: "1.0.3",
+    versionCode: 4,
     author: "Hanami Community",
     audio: ["sub", "dub"],
     baseUrl: ANIKOTO,
@@ -41,7 +41,7 @@
       let targetSlug = null;
 
       // 1. Search candidate anime
-      for (const query of titles.slice(0, 3)) {
+      for (const query of titles.slice(0, 2)) {
         if (!query) continue;
         try {
           const searchUrl =
@@ -50,7 +50,7 @@
           const html = await res.text();
 
           const linkRegex =
-            /<a\s+class="name d-title"\s+href="(?:https?:\/\/[^"/]+)?\/watch\/([^"/]+)(?:\/ep-\d+)?"[^>]*data-jp="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+            /<a[^>]+href="(?:https?:\/\/[^"/]+)?\/watch\/([^"/]+)(?:\/ep-\d+)?"[^>]*>/gi;
           let match;
           while ((match = linkRegex.exec(html)) !== null) {
             targetSlug = match[1];
