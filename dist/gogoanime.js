@@ -28,8 +28,8 @@
   const GogoanimeExtension = {
     id: "gogoanime",
     name: "Gogoanime",
-    version: "1.0.0",
-    versionCode: 1,
+    version: "1.0.1",
+    versionCode: 2,
     author: "Hanami Community",
     audio: ["sub", "dub"],
     baseUrl: BASE,
@@ -54,7 +54,7 @@
           const res = await fetch(searchUrl, { headers: HEADERS });
           const html = await res.text();
 
-          const linkRegex = /<a\s+href="https:\/\/gogoanime\.or\.at\/anime\/([^"/]+)\/?"\s+title="([^"]*)"/gi;
+          const linkRegex = /<a[^>]+href="https:\/\/gogoanime\.or\.at\/anime\/([^"/]+)\/?"[^>]*title="([^"]*)"/gi;
           let match;
           while ((match = linkRegex.exec(html)) !== null) {
             const slug = match[1];

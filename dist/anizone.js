@@ -57,7 +57,7 @@
     return t["1"] || t["5"] || t["8"] || Object.values(t)[0] || "";
   }
 
-  function buildSearchQueries(meta) {
+    function buildSearchQueries(meta) {
     const list = [
       meta.titles && meta.titles.english,
       meta.titles && meta.titles.romaji,
@@ -67,8 +67,16 @@
     for (const t of list) {
       const clean = t.replace(/\s+/g, " ").trim();
       if (clean && !queries.includes(clean)) queries.push(clean);
+      const stripped = clean
+        .replace(/\b(?:season|part|cour|stage)\s*\d+\b/gi, "")
+        .replace(/\b\d+(?:st|nd|rd|th)\s*(?:season|part)\b/gi, "")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (stripped && stripped !== clean && !queries.includes(stripped)) {
+        queries.push(stripped);
+      }
     }
-    return queries.slice(0, 2);
+    return queries;
   }
 
   function scoreMatch(candidate, meta) {
@@ -114,9 +122,9 @@
 
     if (meta.year && candidate.start_year) {
       if (Number(meta.year) === Number(candidate.start_year)) {
-        maxScore += 0.1;
+        maxScore += 0.35;
       } else if (Math.abs(Number(meta.year) - Number(candidate.start_year)) > 1) {
-        maxScore -= 0.15;
+        maxScore -= 0.35;
       }
     }
 
