@@ -1,13 +1,13 @@
 /**
  * AnimeGG Extension for Hanami
- * Version: 1.0.0
- * Audio: Sub & Dub
+ * Native direct MP4 extraction with robust multi-attribute scraping and candidate scoring.
  */
 (function() {
   const BASE = "https://www.animegg.org";
   const HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Referer": BASE + "/"
+    "Referer": BASE + "/",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
   };
 
   function cleanTitle(str) {
@@ -15,17 +15,74 @@
       .replace(/&amp;/g, "&")
       .replace(/&lt;/g, "<")
       .replace(/&gt;/g, ">")
-      .replace(/&quot;/g, '"')
-      .replace(/&#039;/g, "'")
+      .replace(/&quot;/g, "\"")
+      .replace(/&#0*39;|&apos;/g, "'")
       .replace(/<[^>]+>/g, "")
       .trim();
+  }
+
+  function normalize(s) {
+    return (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  }
+
+  function getAttr(tag, name) {
+    var m = tag.match(new RegExp(name + "\\s*=\\s*['\"]([^'\"]*)['\"]", "i"));
+    return m ? m[1] : null;
+  }
+
+  function scoreCandidate(cand, primaryEn, primaryRom, synonyms) {
+    let score = 0;
+    const synList = synonyms || [];
+    const candNameNorm = normalize(cand.name);
+    const candSlugNorm = normalize(cand.slug);
+
+    const normEn = normalize(primaryEn || "");
+    const normRom = normalize(primaryRom || "");
+
+    if (normEn && candNameNorm === normEn) score += 1000;
+    if (normRom && candNameNorm === normRom) score += 900;
+
+    const targetText = ((primaryEn || "") + " " + (primaryRom || "") + " " + synList.join(" ")).toLowerCase();
+
+    const modifiers = [
+      "season 2",
+      "season 3",
+      "season 4",
+      "season 5",
+      "2nd season",
+      "3rd season",
+      "4th season",
+      "5th season",
+      "movie",
+      "ova",
+      "special",
+      "specials",
+    ];
+
+    for (const mod of modifiers) {
+      const modNorm = normalize(mod);
+      const candHasMod = candNameNorm.includes(modNorm) || candSlugNorm.includes(modNorm);
+      const targetHasMod = targetText.includes(mod);
+      if (candHasMod && targetHasMod) score += 500;
+      if (candHasMod && !targetHasMod) score -= 400;
+      if (!candHasMod && targetHasMod) score -= 400;
+    }
+
+    const allTitles = [primaryEn, primaryRom].concat(synList);
+    for (const t of allTitles) {
+      const normT = normalize(t || "");
+      if (!normT || normT.length < 3) continue;
+      if (candNameNorm.includes(normT) || normT.includes(candNameNorm)) score += 60;
+    }
+
+    return score;
   }
 
   const AnimeggExtension = {
     id: "animegg",
     name: "AnimeGG",
-    version: "1.0.0",
-    versionCode: 1,
+    version: "1.0.1",
+    versionCode: 2,
     author: "Hanami Community",
     audio: ["sub", "dub"],
     baseUrl: BASE,
@@ -33,14 +90,15 @@
 
     async getEpisodes(meta) {
       const titles = [
-        meta.titles.english,
-        meta.titles.romaji,
-        ...(meta.titles.synonyms || [])
+        meta.titles && meta.titles.english,
+        meta.titles && meta.titles.romaji,
+        ...((meta.titles && meta.titles.synonyms) || []),
       ].filter(Boolean);
 
       let targetSlug = null;
+      let candidates = [];
 
-      // 1. Search AnimeGG
+      // 1. Search AnimeGG across titles
       for (const query of titles.slice(0, 3)) {
         if (!query) continue;
         try {
@@ -48,17 +106,31 @@
           const res = await fetch(searchUrl, { headers: HEADERS });
           const html = await res.text();
 
-          const linkRegex = /<a\s+[^>]*class="[^"]*mse[^"]*"[^>]*href="\/series\/([^/?#]+)"/gi;
+          const linkRegex = /<a\s+[^>]*href=["']\/series\/([^/?#'"]+)["'][^>]*>([\s\S]*?)<\/a>/gi;
           let match;
           while ((match = linkRegex.exec(html)) !== null) {
-            targetSlug = match[1];
-            break;
+            const tag = match[0];
+            if (!tag.includes("mse")) continue;
+            const slug = match[1];
+            const name = cleanTitle(match[2]);
+            const score = scoreCandidate(
+              { slug: slug, name: name },
+              meta.titles && meta.titles.english,
+              meta.titles && meta.titles.romaji,
+              meta.titles && meta.titles.synonyms
+            );
+            candidates.push({ slug: slug, name: name, score: score });
           }
 
-          if (targetSlug) break;
+          if (candidates.length) break;
         } catch (e) {
-          console.warn("AnimeGG search error:", e.message);
+          console.warn("AnimeGG search error:", (e && e.message) || e);
         }
+      }
+
+      candidates.sort((a, b) => b.score - a.score);
+      if (candidates.length > 0) {
+        targetSlug = candidates[0].slug;
       }
 
       if (!targetSlug) return [];
@@ -78,7 +150,7 @@
           const content = liMatch[1];
           if (!content.includes("anm_det_pop")) continue;
 
-          const hrefMatch = content.match(/href="\/([^"#]+)/);
+          const hrefMatch = content.match(/href=["']\/?([^"'#]+)/);
           const strongMatch = content.match(/<strong>([\s\S]*?)<\/strong>/);
           if (!hrefMatch || !strongMatch) continue;
 
@@ -91,7 +163,7 @@
           if (isNaN(num) || seen.has(num)) continue;
           seen.add(num);
 
-          const titleMatch = content.match(/class="[^"]*anititle[^"]*"[^>]*>([\s\S]*?)<\/i>/i);
+          const titleMatch = content.match(/class=["'][^"']*anititle[^"']*["'][^>]*>([\s\S]*?)<\/i>/i);
           const title = titleMatch ? cleanTitle(titleMatch[1]) : ("Episode " + num);
 
           const isSub = content.includes("btn-subbed");
@@ -102,11 +174,11 @@
             title: title,
             ref: href,
             sub: isSub || !isDub,
-            dub: isDub
+            dub: isDub,
           });
         }
       } catch (e) {
-        console.warn("AnimeGG parse episodes error:", e.message);
+        console.warn("AnimeGG parse episodes error:", (e && e.message) || e);
       }
 
       episodes.sort((a, b) => a.number - b.number);
@@ -121,15 +193,17 @@
         const res = await fetch(epUrl, { headers: HEADERS });
         const html = await res.text();
 
-        const aRegex = /<a\s+[^>]*data-id="([^"]*)"[^>]*data-mirror="([^"]*)"[^>]*data-version="([^"]*)"[^>]*>/gi;
+        const aRegex = /<a\b[^>]*data-toggle=["']tab["'][^>]*>/gi;
         let match;
         const embeds = [];
 
         while ((match = aRegex.exec(html)) !== null) {
-          const embedId = match[1];
-          const mirror = match[2] || "Server";
-          const version = match[3] || "subbed";
+          const tag = match[0];
+          const embedId = getAttr(tag, "data-id");
+          const mirror = getAttr(tag, "data-mirror") || "AnimeGG";
+          const version = (getAttr(tag, "data-version") || "subbed").toLowerCase();
 
+          if (!embedId) continue;
           if (audio === "dub" && !version.startsWith("dub")) continue;
           if (audio === "sub" && version.startsWith("dub")) continue;
 
@@ -137,46 +211,44 @@
         }
 
         for (const e of embeds.slice(0, 3)) {
-          const embedUrl = BASE + "/embed/" + e.id;
-          const eRes = await fetch(embedUrl, {
-            headers: Object.assign({}, HEADERS, { "Referer": BASE + "/" })
-          });
-          const eHtml = await eRes.text();
+          try {
+            const embedUrl = BASE + "/embed/" + e.id;
+            const eRes = await fetch(embedUrl, {
+              headers: Object.assign({}, HEADERS, { "Referer": BASE + "/" }),
+            });
+            const eHtml = await eRes.text();
 
-          const rawMatch = eHtml.match(/var\s+videoSources\s*=\s*(\[[\s\S]*?\]);/);
-          if (rawMatch) {
-            try {
-              const rawJson = rawMatch[1]
-                .replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":')
-                .replace(/:\s*'([^']*)'/g, ': "$1"');
-              const sources = JSON.parse(rawJson);
+            const rawMatch = eHtml.match(/var\s+videoSources\s*=\s*(\[[\s\S]*?\]);/);
+            if (rawMatch) {
+              const itemRegex = /file:\s*["']([^"']+)["'](?:,\s*label:\s*["']([^"']+)["'])?/gi;
+              let sm;
+              while ((sm = itemRegex.exec(rawMatch[1])) !== null) {
+                const filePath = sm[1];
+                const label = sm[2] || "720p";
+                const videoUrl = filePath.startsWith("http") ? filePath : (BASE + (filePath.startsWith("/") ? "" : "/") + filePath);
 
-              if (Array.isArray(sources)) {
-                for (const s of sources) {
-                  if (s && s.file) {
-                    const videoUrl = s.file.startsWith("http") ? s.file : (BASE + s.file);
-                    streams.push({
-                      url: videoUrl,
-                      type: videoUrl.includes(".m3u8") ? "hls" : "mp4",
-                      server: e.server + (s.label ? " · " + s.label : ""),
-                      quality: s.label || "720p",
-                      headers: { "Referer": BASE + "/" }
-                    });
-                  }
-                }
+                streams.push({
+                  url: videoUrl,
+                  type: videoUrl.includes(".m3u8") ? "hls" : "mp4",
+                  server: e.server + (label ? " · " + label : ""),
+                  quality: label,
+                  headers: { "Referer": BASE + "/" },
+                });
               }
-            } catch (_) {}
+            }
+          } catch (err) {
+            console.warn("AnimeGG embed fetch error:", (err && err.message) || err);
           }
         }
       } catch (e) {
-        console.warn("AnimeGG getStreams error:", e.message);
+        console.warn("AnimeGG getStreams error:", (e && e.message) || e);
       }
 
       return {
-        streams: streams
+        streams: streams,
       };
-    }
+    },
   };
 
-  registerExtension(AnimeggExtension);
+  (globalThis.registerExtension || registerExtension)(AnimeggExtension);
 })();
