@@ -21,8 +21,8 @@
     {
       "id": "anikoto",
       "name": "Anikoto",
-      "version": "1.0.5",
-      "versionCode": 6,
+      "version": "1.0.6",
+      "versionCode": 7,
       "author": "Hanami Community",
       "audio": [
         "sub",
