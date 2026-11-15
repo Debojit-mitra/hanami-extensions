@@ -1,6 +1,6 @@
 /**
  * AniZone Extension for Hanami
- * Version: 1.0.1
+ * Version: 1.0.2
  * Audio: Sub
  */
 (function() {
@@ -147,8 +147,8 @@
   const AnizoneExtension = {
     id: "anizone",
     name: "AniZone",
-    version: "1.0.1",
-    versionCode: 2,
+    version: "1.0.2",
+    versionCode: 3,
     author: "Hanami Community",
     audio: ["sub"],
     baseUrl: BASE,

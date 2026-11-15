@@ -1,6 +1,6 @@
 /**
  * Anikoto Extension for Hanami
- * Version: 1.0.1
+ * Version: 1.0.2
  * Audio: Sub & Dub
  */
 (function () {
@@ -24,8 +24,8 @@
   const AnikotoExtension = {
     id: "anikoto",
     name: "Anikoto",
-    version: "1.0.1",
-    versionCode: 2,
+    version: "1.0.2",
+    versionCode: 3,
     author: "Hanami Community",
     audio: ["sub", "dub"],
     baseUrl: ANIKOTO,
@@ -50,7 +50,7 @@
           const html = await res.text();
 
           const linkRegex =
-            /<a\s+class="name d-title"\s+href="(?:https:\/\/anikototv\.to)?\/watch\/([^"/]+)(?:\/ep-\d+)?"[^>]*data-jp="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+            /<a\s+class="name d-title"\s+href="(?:https?:\/\/[^"/]+)?\/watch\/([^"/]+)(?:\/ep-\d+)?"[^>]*data-jp="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
           let match;
           while ((match = linkRegex.exec(html)) !== null) {
             targetSlug = match[1];
