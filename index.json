@@ -21,8 +21,8 @@
     {
       "id": "anikoto",
       "name": "Anikoto",
-      "version": "1.0.3",
-      "versionCode": 4,
+      "version": "1.0.5",
+      "versionCode": 6,
       "author": "Hanami Community",
       "audio": [
         "sub",
@@ -30,7 +30,7 @@
       ],
       "lang": "en",
       "baseUrl": "https://anikototv.bz",
-      "description": "Fast high-quality multi-source streams from Anikoto.",
+      "description": "Fast high-quality direct HLS video streams with soft subtitles from Anikoto.",
       "pkgUrl": "dist/anikoto.js"
     },
     {
