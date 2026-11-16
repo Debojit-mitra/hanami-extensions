@@ -1,7 +1,7 @@
 /**
  * Gogoanime Extension for Hanami
  * Ported directly from hanami-extractor
- * Version: 1.0.3
+ * Version: 1.0.4
  * Audio: Sub & Dub
  */
 (function() {
@@ -81,7 +81,8 @@
     const typeMarker = normalized.match(/\b(ova|ona|special)\b/)?.[1];
     if (typeMarker) markers.set("format", new Set([typeMarker]));
 
-    const ending = normalized.split(/\s+/).at(-1) || "";
+    const endingParts = normalized.split(/\s+/);
+    const ending = (endingParts.length > 0 ? endingParts[endingParts.length - 1] : "") || "";
     const number = ending.match(/^(\d{1,2})(?:st|nd|rd|th)?$/)?.[1] ?? text.match(/([a-z])(\d{1,2})$/)?.[2];
     const roman = { ii: "2", iii: "3", iv: "4", v: "5", vi: "6", vii: "7", viii: "8", ix: "9", x: "10" }[ending];
     const endingValue = number || roman;
@@ -347,8 +348,8 @@
   const GogoanimeExtension = {
     id: "gogoanime",
     name: "Gogoanime",
-    version: "1.0.3",
-    versionCode: 4,
+    version: "1.0.4",
+    versionCode: 5,
     author: "Hanami Community",
     audio: ["sub", "dub"],
     baseUrl: BASE,
@@ -454,17 +455,17 @@
           fetchAnimePage(dubSlug)
         ]);
 
-        if (subDetail?.episodes?.length) subEpisodes = subDetail.episodes;
-        if (dubDetail?.episodes?.length) dubEpisodes = dubDetail.episodes;
+        if (subDetail && subDetail.episodes && subDetail.episodes.length) subEpisodes = subDetail.episodes;
+        if (dubDetail && dubDetail.episodes && dubDetail.episodes.length) dubEpisodes = dubDetail.episodes;
       }
 
       // Only probe the counterpart if it belongs to the EXACT same baseSlug
       if (subEpisodes.length && !dubEpisodes.length) {
         const probeDub = await fetchAnimePage(`${chosenGroup.baseSlug}-dub`);
-        if (probeDub?.episodes?.length) dubEpisodes = probeDub.episodes;
+        if (probeDub && probeDub.episodes && probeDub.episodes.length) dubEpisodes = probeDub.episodes;
       } else if (dubEpisodes.length && !subEpisodes.length) {
         const probeSub = await fetchAnimePage(chosenGroup.baseSlug);
-        if (probeSub?.episodes?.length) subEpisodes = probeSub.episodes;
+        if (probeSub && probeSub.episodes && probeSub.episodes.length) subEpisodes = probeSub.episodes;
       }
 
       // Merge sub and dub episodes by episode number
