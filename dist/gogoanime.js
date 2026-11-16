@@ -1,6 +1,7 @@
 /**
  * Gogoanime Extension for Hanami
- * Version: 1.0.2
+ * Ported directly from hanami-extractor
+ * Version: 1.0.3
  * Audio: Sub & Dub
  */
 (function() {
@@ -10,11 +11,7 @@
     "Referer": BASE + "/"
   };
 
-  function normalize(s) {
-    return (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  }
-
-  function cleanTitle(str) {
+  function decodeEntities(str) {
     return (str || "")
       .replace(/&amp;/g, "&")
       .replace(/&lt;/g, "<")
@@ -25,72 +22,221 @@
       .trim();
   }
 
+  function titleText(value) {
+    return String(value || "")
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^\p{L}\p{N}]+/gu, " ")
+      .trim();
+  }
+
+  const STOP_WORDS = new Set([
+    "a", "an", "and", "of", "the", "to", "in", "on", "for", "no", "wa", "season", "part", "stage", "cour",
+    "chapter", "chapters", "episode", "episodes", "movie", "film", "tv", "ova", "ona", "special", "specials",
+    "final", "finale", "arc",
+  ]);
+
+  const SMALL_NUMBERS = {
+    one: 1, two: 2, three: 3, four: 4, five: 5,
+    six: 6, seven: 7, eight: 8, nine: 9, ten: 10
+  };
+
+  function titleWords(value) {
+    return new Set(
+      titleText(value)
+        .split(/\s+/)
+        .filter((w) => w.length > 1 && !STOP_WORDS.has(w) && !/^\d+(?:st|nd|rd|th)?$/.test(w))
+    );
+  }
+
+  const SEASONISH = ["season", "part", "stage", "cour"];
+
+  function markerValues(value) {
+    const normalized = titleText(value);
+    const text = normalized.replace(/\s+/g, "");
+    const markers = new Map();
+    const words = {
+      ...Object.fromEntries(Object.entries(SMALL_NUMBERS).map(([k, v]) => [k, String(v)])),
+      first: "1", second: "2", third: "3", fourth: "4", fifth: "5"
+    };
+
+    for (const marker of SEASONISH) {
+      const values = new Set();
+      for (const m of text.matchAll(new RegExp(`${marker}(\\d+)`, "g"))) values.add(m[1]);
+      for (const m of text.matchAll(new RegExp(`(\\d+)(?:st|nd|rd|th)${marker}`, "g"))) values.add(m[1]);
+      for (const [word, number] of Object.entries(words)) {
+        if (text.includes(`${marker}${word}`) || text.includes(`${word}${marker}`)) values.add(number);
+      }
+      if (values.size) markers.set(marker, values);
+    }
+
+    const finals = new Set();
+    for (const m of text.matchAll(/final(season|chapters?|part|arc)/g)) {
+      finals.add(m[1].startsWith("chapter") ? "chapters" : m[1]);
+    }
+    if (finals.size) markers.set("final", finals);
+
+    if (/movie|film|gekijouban/.test(text)) markers.set("format", new Set(["movie"]));
+    const typeMarker = normalized.match(/\b(ova|ona|special)\b/)?.[1];
+    if (typeMarker) markers.set("format", new Set([typeMarker]));
+
+    const ending = normalized.split(/\s+/).at(-1) || "";
+    const number = ending.match(/^(\d{1,2})(?:st|nd|rd|th)?$/)?.[1] ?? text.match(/([a-z])(\d{1,2})$/)?.[2];
+    const roman = { ii: "2", iii: "3", iv: "4", v: "5", vi: "6", vii: "7", viii: "8", ix: "9", x: "10" }[ending];
+    const endingValue = number || roman;
+    const alreadyMarked = endingValue && SEASONISH.some((m) => markers.get(m)?.has(endingValue));
+    if (endingValue && !alreadyMarked) markers.set("numbered", new Set([endingValue]));
+
+    return markers;
+  }
+
+  function dice(a, b) {
+    const left = titleText(a).replace(/\s+/g, "");
+    const right = titleText(b).replace(/\s+/g, "");
+    if (left === right) return 1;
+    if (left.length < 2 || right.length < 2) return 0;
+    const grams = new Map();
+    for (let i = 0; i < left.length - 1; i++) {
+      const g = left.slice(i, i + 2);
+      grams.set(g, (grams.get(g) ?? 0) + 1);
+    }
+    let hits = 0;
+    for (let i = 0; i < right.length - 1; i++) {
+      const g = right.slice(i, i + 2);
+      const n = grams.get(g) ?? 0;
+      if (n) { hits++; grams.set(g, n - 1); }
+    }
+    return (2 * hits) / (left.length + right.length - 2);
+  }
+
+  function titleIdentityScore(titles, candidates) {
+    const targets = titles.filter(Boolean);
+    const cands = candidates.filter(Boolean);
+    const targetMarkers = new Map();
+    for (const title of targets.slice(0, 3)) {
+      for (const [marker, values] of markerValues(title)) {
+        if (!targetMarkers.has(marker)) targetMarkers.set(marker, new Set());
+        for (const v of values) targetMarkers.get(marker).add(v);
+      }
+    }
+
+    let best = 0;
+    for (const title of targets) {
+      const queryWords = titleWords(title);
+      for (const candidate of cands) {
+        const candidateWords = titleWords(candidate);
+        const lexical = dice([...queryWords].join(" ") || title, [...candidateWords].join(" ") || candidate);
+        if ((!queryWords.size || !candidateWords.size) && lexical < 0.86) continue;
+
+        const candidateMarkers = markerValues(candidate);
+        let conflict = false;
+        let penalty = 0;
+        for (const [marker, queryValues] of targetMarkers) {
+          const values = candidateMarkers.get(marker);
+          if (values && ![...queryValues].some((v) => values.has(v))) {
+            conflict = true;
+            break;
+          }
+          if (!values && !(marker === "season" && candidateMarkers.has("final"))) penalty += SEASONISH.includes(marker) ? 0.22 : 0.16;
+        }
+        if (conflict) continue;
+        for (const marker of candidateMarkers.keys()) {
+          if (!targetMarkers.has(marker)) penalty += SEASONISH.includes(marker) ? 0.18 : 0.12;
+        }
+        penalty = Math.min(0.48, penalty);
+
+        let shared = 0;
+        for (const w of queryWords) if (candidateWords.has(w)) shared++;
+        const coverage = queryWords.size && candidateWords.size ? Math.min(shared / queryWords.size, shared / candidateWords.size) : lexical;
+        if (Math.min(queryWords.size, candidateWords.size) < 3) {
+          if (lexical < 0.76) continue;
+        } else if (coverage < 0.5) continue;
+
+        best = Math.max(best, Math.max(0, lexical * 0.7 + coverage * 0.3 - penalty));
+      }
+    }
+    return best;
+  }
+
+  function scoreCandidate(cand, meta, titles, expected) {
+    const titleScore = titleIdentityScore(titles, cand.titles);
+    const kind = String(meta.format || "").toLowerCase();
+    const year = meta.year;
+
+    if (titleScore < 0.60) return null;
+    if (year && cand.year && Math.abs(year - cand.year) > 1) return null;
+
+    let cov = 0.5;
+    if (expected && expected > 0 && cand.episodeCount > 0) {
+      cov = Math.min(1, cand.episodeCount / expected);
+      if (expected >= 6 && cov < 0.7) return null;
+    }
+
+    const score =
+      titleScore * 0.70 +
+      (year && cand.year === year ? 0.18 : 0.05) +
+      cov * 0.12;
+
+    return {
+      candidate: cand,
+      titleScore: titleScore,
+      score: score,
+      exactCount: Boolean(expected && cand.episodeCount === expected)
+    };
+  }
+
+  function pickBest(scored) {
+    const sorted = [...scored].sort((a, b) => b.score - a.score || Number(b.exactCount) - Number(a.exactCount));
+    return sorted.length > 0 ? sorted[0] : null;
+  }
+
+  async function fetchAnimePage(slug) {
+    try {
+      const url = `${BASE}/anime/${slug}/`;
+      const res = await fetch(url, { headers: HEADERS });
+      if (!res.ok) return null;
+      const html = await res.text();
+
+      const alterMatch = html.match(/<span class="alter">([\s\S]*?)<\/span>/i);
+      const alterText = alterMatch ? decodeEntities(alterMatch[1].replace(/<[^>]+>/g, "").trim()) : "";
+      const alternateTitles = alterText ? alterText.split(/[,;/]/).map((t) => t.trim()).filter(Boolean) : [];
+
+      const yearMatch = html.match(/<b>Released:<\/b>\s*(\d{4})/i);
+      const year = yearMatch ? Number(yearMatch[1]) : null;
+
+      const episodes = [];
+      const lis = [...html.matchAll(/<li[^>]*data-index="[^"]*"[^>]*>([\s\S]*?)<\/li>/gi)];
+      for (const li of lis) {
+        const text = li[1];
+        const linkMatch = text.match(/<a\s+href="([^"]+)"/i);
+        const numMatch = text.match(/<div class="epl-num">([^<]+)<\/div>/i);
+        if (!linkMatch || !numMatch) continue;
+        const url = linkMatch[1];
+        const num = Number(numMatch[1].trim());
+        if (!Number.isFinite(num) || num < 1) continue;
+
+        const titleMatch = text.match(/<div class="epl-title">([\s\S]*?)<\/div>/i);
+        const epTitle = titleMatch ? decodeEntities(titleMatch[1].replace(/<[^>]+>/g, "").trim()) : `Episode ${num}`;
+        const dateMatch = text.match(/<div class="epl-date">([^<]+)<\/div>/i);
+        const date = dateMatch ? dateMatch[1].trim() : null;
+
+        episodes.push({ number: num, url: url, title: epTitle, date: date });
+      }
+      episodes.sort((a, b) => a.number - b.number);
+      return { alternateTitles: alternateTitles, year: year, episodes: episodes };
+    } catch (_) {
+      return null;
+    }
+  }
+
   function base64urlToBase64(str) {
     let b64 = (str || "").replace(/-/g, "+").replace(/_/g, "/");
     while (b64.length % 4) b64 += "=";
     return b64;
   }
 
-  function scoreCandidate(cand, primaryEn, primaryRom, synonyms) {
-    let score = 0;
-    const synList = synonyms || [];
-    const candNameNorm = normalize(cand.name);
-    const candSlugNorm = normalize(cand.baseSlug);
-
-    const normEn = normalize(primaryEn || "");
-    const normRom = normalize(primaryRom || "");
-
-    if (normEn && candNameNorm === normEn) score += 1000;
-    if (normRom && candNameNorm === normRom) score += 900;
-    if (normEn && candSlugNorm === normEn) score += 950;
-    if (normRom && candSlugNorm === normRom) score += 850;
-
-    const targetText = ((primaryEn || "") + " " + (primaryRom || "") + " " + synList.join(" ")).toLowerCase();
-
-    const modifiers = [
-      "season 2",
-      "season 3",
-      "season 4",
-      "season 5",
-      "season 6",
-      "2nd season",
-      "3rd season",
-      "4th season",
-      "5th season",
-      "part 2",
-      "part 3",
-      "part 4",
-      "cour 2",
-      "movie",
-      "film",
-      "ova",
-      "special",
-      "specials"
-    ];
-
-    for (const mod of modifiers) {
-      const modNorm = normalize(mod);
-      const candHasMod = candNameNorm.includes(modNorm) || candSlugNorm.includes(modNorm);
-      const targetHasMod = targetText.includes(mod);
-      if (candHasMod && targetHasMod) score += 500;
-      if (candHasMod && !targetHasMod) score -= 600;
-      if (!candHasMod && targetHasMod) score -= 400;
-    }
-
-    const allTitles = [primaryEn, primaryRom].concat(synList);
-    for (const t of allTitles) {
-      const normT = normalize(t || "");
-      if (!normT || normT.length < 3) continue;
-      if (candNameNorm === normT) score += 200;
-      else if (candNameNorm.includes(normT) || normT.includes(candNameNorm)) score += 60;
-      if (candSlugNorm === normT) score += 150;
-      else if (candSlugNorm.includes(normT) || normT.includes(candSlugNorm)) score += 50;
-    }
-
-    return score;
-  }
-
-  /* ── MegaPlay Direct HLS Extractor (Native Hanami Crypto) ────────── */
+  /* ── MegaPlay Direct HLS Extractor ─────────────────────────────────── */
   async function extractMegaPlay(embedUrl, audio) {
     const originMatch = embedUrl.match(/^(https?:\/\/[^/]+)/);
     const origin = originMatch ? originMatch[1] : "https://megaplay.buzz";
@@ -150,18 +296,16 @@
       throw new Error("MegaPlay returned no source data");
     }
 
-    // 1. Decrypt AES-256-CBC using Hanami's native Crypto bridge
     const encB64 = base64urlToBase64(data.enc);
     const decryptedStr = await hanami.crypto.aesDecryptCbc(encB64, encKey, encIv);
     if (!decryptedStr) {
-      throw new Error("MegaPlay native AES-CBC decryption returned empty");
+      throw new Error("MegaPlay AES decryption returned empty");
     }
 
     const decryptedObj = JSON.parse(decryptedStr);
     let masterUrl = decryptedObj?.file || decryptedObj?.url ||
       (Array.isArray(decryptedObj?.sources) ? decryptedObj.sources[0]?.file : decryptedObj?.sources?.file);
 
-    // 2. Token signing using native HMAC-SHA256 and Base64Url
     if (masterUrl) {
       const pathMatch = String(masterUrl).match(/\/([a-f0-9]{32})\/([a-f0-9]{32})\//i);
       if (pathMatch) {
@@ -199,30 +343,38 @@
     };
   }
 
+  /* ── Gogoanime Extension Object ───────────────────────────────────── */
   const GogoanimeExtension = {
     id: "gogoanime",
     name: "Gogoanime",
-    version: "1.0.2",
-    versionCode: 3,
+    version: "1.0.3",
+    versionCode: 4,
     author: "Hanami Community",
     audio: ["sub", "dub"],
     baseUrl: BASE,
-    description: "Stream sub and dub anime with high availability.",
+    description: "Stream sub and dub anime with high availability from Gogoanime.",
 
     async getEpisodes(meta) {
-      const enTitle = meta.titles && meta.titles.english;
-      const romTitle = meta.titles && meta.titles.romaji;
+      const englishTitle = meta.titles && meta.titles.english;
+      const romajiTitle = meta.titles && meta.titles.romaji;
       const synonyms = (meta.titles && meta.titles.synonyms) || [];
+      const titles = [englishTitle, romajiTitle, ...synonyms].filter(Boolean);
+      const expected = meta.episodesCount || null;
 
-      // Gogoanime uses English titles primarily
-      const queries = [enTitle, romTitle, ...synonyms].filter(Boolean);
+      const queries = [];
+      if (englishTitle) queries.push(englishTitle);
+      if (romajiTitle && romajiTitle !== englishTitle) queries.push(romajiTitle);
+      for (const s of synonyms.slice(0, 2)) {
+        if (!queries.includes(s)) queries.push(s);
+      }
+
       const groupMap = new Map();
 
-      for (const query of queries.slice(0, 3)) {
-        if (!query) continue;
+      for (const q of queries.slice(0, 3)) {
         try {
-          const searchUrl = BASE + "/?s=" + encodeURIComponent(query);
+          const searchUrl = `${BASE}/?s=${encodeURIComponent(q)}`;
           const res = await fetch(searchUrl, { headers: HEADERS });
+          if (!res.ok) continue;
           const html = await res.text();
 
           const articles = [...html.matchAll(/<article\s+class="bs"[\s\S]*?<\/article>/gi)];
@@ -231,21 +383,18 @@
             const linkMatch = content.match(/<a\s+href="https:\/\/gogoanime\.or\.at\/anime\/([^"/]+)\/?"[^>]*title="([^"]*)"/i);
             if (!linkMatch) continue;
             const slug = linkMatch[1];
-            const rawTitle = cleanTitle(linkMatch[2]);
-            const isDub = slug.endsWith("-dub") || /\(dub\)/i.test(rawTitle) || /class="sb Dub"/i.test(content);
+            const rawTitle = decodeEntities(linkMatch[2].trim());
+            const isDub = /\(Dub\)$/i.test(rawTitle) || /class="sb Dub"/i.test(content) || slug.endsWith("-dub");
             const cleanT = rawTitle.replace(/\s*\((?:dub|sub)\)\s*$/i, "").trim();
             const baseSlug = slug.replace(/-(?:dub|sub)$/i, "");
 
             let g = groupMap.get(baseSlug);
             if (!g) {
-              g = { baseSlug: baseSlug, name: cleanT, subSlug: null, dubSlug: null };
+              g = { baseSlug: baseSlug, cleanTitle: cleanT, subSlug: undefined, dubSlug: undefined };
               groupMap.set(baseSlug, g);
             }
-            if (isDub) {
-              g.dubSlug = slug;
-            } else {
-              g.subSlug = slug;
-            }
+            if (isDub) g.dubSlug = slug;
+            else g.subSlug = slug;
           }
 
           if (groupMap.size > 0) break;
@@ -254,90 +403,126 @@
         }
       }
 
-      const candidates = Array.from(groupMap.values());
-      for (const c of candidates) {
-        c.score = scoreCandidate(c, enTitle, romTitle, synonyms);
-      }
-      candidates.sort((a, b) => b.score - a.score);
-
-      const chosenGroup = candidates.length > 0 ? candidates[0] : null;
-      let targetSubSlug = chosenGroup ? (chosenGroup.subSlug || chosenGroup.baseSlug) : null;
-      let targetDubSlug = chosenGroup ? chosenGroup.dubSlug : null;
-
-      if (!targetSubSlug && !targetDubSlug) {
-        const fallback = (romTitle || enTitle || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-        targetSubSlug = fallback;
+      if (groupMap.size === 0) {
+        return [];
       }
 
-      const episodesMap = new Map();
+      // Inspect candidates to fetch detail & episode count (up to 6 candidates)
+      const candidatesToInspect = Array.from(groupMap.values()).slice(0, 6);
+      const scoredCandidates = [];
 
-      async function fetchEpisodesFromSlug(slug, isDub) {
-        if (!slug) return false;
-        try {
-          const pageUrl = BASE + "/anime/" + slug + "/";
-          const res = await fetch(pageUrl, { headers: HEADERS });
-          if (!res.ok) return false;
-          const html = await res.text();
+      for (const g of candidatesToInspect) {
+        const primarySlug = g.subSlug || g.dubSlug || g.baseSlug;
+        const detail = await fetchAnimePage(primarySlug);
+        if (!detail || !detail.episodes.length) continue;
 
-          const liRegex = /<li[^>]*data-index="[^"]*"[^>]*>([\s\S]*?)<\/li>/gi;
-          let liMatch;
-          let count = 0;
-          while ((liMatch = liRegex.exec(html)) !== null) {
-            const liContent = liMatch[1];
-            const hrefMatch = liContent.match(/<a\s+href="([^"]+)"/i);
-            const numMatch = liContent.match(/<div class="epl-num">([^<]+)<\/div>/i);
-            if (!hrefMatch || !numMatch) continue;
+        const cand = {
+          id: g.baseSlug,
+          titles: [...new Set([g.cleanTitle, ...detail.alternateTitles, g.baseSlug.replace(/-/g, " ")].filter(Boolean))],
+          year: detail.year,
+          episodeCount: detail.episodes.length,
+          group: g,
+          detail: detail,
+        };
 
-            const url = hrefMatch[1];
-            const num = parseInt(numMatch[1].trim(), 10);
-            if (isNaN(num) || num < 1) continue;
-
-            const titleMatch = liContent.match(/<div class="epl-title">([\s\S]*?)<\/div>/i);
-            const epTitle = titleMatch ? cleanTitle(titleMatch[1]) : "Episode " + num;
-
-            if (!episodesMap.has(num)) {
-              episodesMap.set(num, {
-                number: num,
-                title: epTitle,
-                ref: url,
-                sub: !isDub,
-                dub: isDub
-              });
-            } else {
-              const existing = episodesMap.get(num);
-              if (isDub) existing.dub = true;
-              else existing.sub = true;
-            }
-            count++;
-          }
-          return count > 0;
-        } catch (e) {
-          console.warn("Gogoanime fetch episodes error for " + slug + ":", (e && e.message) || e);
-          return false;
+        const sc = scoreCandidate(cand, meta, titles, expected);
+        if (sc) {
+          scoredCandidates.push(sc);
         }
       }
 
-      const subOk = await fetchEpisodesFromSlug(targetSubSlug, false);
-      if (targetDubSlug && targetDubSlug !== targetSubSlug) {
-        await fetchEpisodesFromSlug(targetDubSlug, true);
-      } else if (chosenGroup && chosenGroup.baseSlug && subOk) {
-        // Probe dub if not explicitly in search results
-        await fetchEpisodesFromSlug(chosenGroup.baseSlug + "-dub", true);
+      const best = pickBest(scoredCandidates);
+      if (!best) {
+        return [];
       }
 
-      const list = Array.from(episodesMap.values());
-      list.sort((a, b) => a.number - b.number);
-      return list;
+      const chosenGroup = best.candidate.group;
+      let subEpisodes = [];
+      let dubEpisodes = [];
+
+      // Fetch sub & dub strictly for the chosenGroup's baseSlug
+      if (chosenGroup.subSlug && !chosenGroup.dubSlug) {
+        subEpisodes = best.candidate.detail.episodes;
+      } else if (chosenGroup.dubSlug && !chosenGroup.subSlug) {
+        dubEpisodes = best.candidate.detail.episodes;
+      } else {
+        const subSlug = chosenGroup.subSlug || chosenGroup.baseSlug;
+        const dubSlug = chosenGroup.dubSlug || `${chosenGroup.baseSlug}-dub`;
+
+        const [subDetail, dubDetail] = await Promise.all([
+          fetchAnimePage(subSlug),
+          fetchAnimePage(dubSlug)
+        ]);
+
+        if (subDetail?.episodes?.length) subEpisodes = subDetail.episodes;
+        if (dubDetail?.episodes?.length) dubEpisodes = dubDetail.episodes;
+      }
+
+      // Only probe the counterpart if it belongs to the EXACT same baseSlug
+      if (subEpisodes.length && !dubEpisodes.length) {
+        const probeDub = await fetchAnimePage(`${chosenGroup.baseSlug}-dub`);
+        if (probeDub?.episodes?.length) dubEpisodes = probeDub.episodes;
+      } else if (dubEpisodes.length && !subEpisodes.length) {
+        const probeSub = await fetchAnimePage(chosenGroup.baseSlug);
+        if (probeSub?.episodes?.length) subEpisodes = probeSub.episodes;
+      }
+
+      // Merge sub and dub episodes by episode number
+      const epMap = new Map();
+
+      for (const e of subEpisodes) {
+        epMap.set(e.number, {
+          number: e.number,
+          title: e.title,
+          date: e.date,
+          subUrl: e.url,
+          dubUrl: undefined
+        });
+      }
+
+      for (const e of dubEpisodes) {
+        const existing = epMap.get(e.number);
+        if (existing) {
+          existing.dubUrl = e.url;
+        } else {
+          epMap.set(e.number, {
+            number: e.number,
+            title: e.title,
+            date: e.date,
+            subUrl: undefined,
+            dubUrl: e.url
+          });
+        }
+      }
+
+      const mergedEpisodes = Array.from(epMap.values())
+        .sort((a, b) => a.number - b.number)
+        .map((e) => ({
+          number: e.number,
+          ref: JSON.stringify({ subUrl: e.subUrl, dubUrl: e.dubUrl }),
+          title: e.title || `Episode ${e.number}`,
+          airDate: e.date || null,
+          sub: Boolean(e.subUrl),
+          dub: Boolean(e.dubUrl)
+        }));
+
+      return mergedEpisodes;
     },
 
     async getStreams(episodeRef, audio) {
-      let targetUrl = episodeRef;
-      if (audio === "dub" && !targetUrl.includes("-dub")) {
-        const dubCandidate = targetUrl.replace(/-episode-(\d+)/, "-dub-episode-$1");
-        try {
-          const testRes = await fetch(dubCandidate, { headers: HEADERS });
-          if (testRes.ok) targetUrl = dubCandidate;
-        } catch (_) {}
+      let targetUrl = null;
+      try {
+        const parsed = JSON.parse(episodeRef);
+        targetUrl = audio === "dub" ? parsed.dubUrl : parsed.subUrl;
+        if (!targetUrl) {
+          targetUrl = audio === "dub" ? parsed.subUrl : parsed.dubUrl;
+        }
+      } catch (_) {
+        targetUrl = episodeRef;
+      }
+
+      if (!targetUrl) {
+        throw new Error(`Gogoanime: No ${audio} stream URL available for this episode.`);
       }
 
       const res = await fetch(targetUrl, { headers: HEADERS });
@@ -399,7 +584,7 @@
         } catch (_) {}
       }
 
-      // Also support legacy li.server
+      // Legacy server elements
       const serverRegex = /<li[^>]*class="server"[^>]*data-video="([^"]+)"[^>]*>([\s\S]*?)<\/li>/gi;
       let sMatch;
       while ((sMatch = serverRegex.exec(html)) !== null) {
@@ -440,7 +625,6 @@
                 }
               }
 
-              // Embed fallback
               streams.push({
                 url: innerSrc,
                 type: "embed",
