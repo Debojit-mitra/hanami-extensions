@@ -96,6 +96,22 @@
       "baseUrl": "https://www.animegg.org",
       "description": "Fast direct MP4 video streams from AnimeGG.",
       "pkgUrl": "dist/animegg.js"
+    },
+    {
+      "id": "hianime",
+      "name": "HiAnime",
+      "version": "1.0.0",
+      "versionCode": 1,
+      "author": "Hanami Community",
+      "icon": "icons/hianime.png",
+      "audio": [
+        "sub",
+        "dub"
+      ],
+      "lang": "en",
+      "baseUrl": "https://hianimes.se",
+      "description": "Fast high-quality direct HLS video streams with multi-language soft subtitles from HiAnime.",
+      "pkgUrl": "dist/hianime.js"
     }
   ]
 }
